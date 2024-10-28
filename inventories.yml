@@ -1,0 +1,16 @@
+ungrouped:
+  hosts:
+    # onu is just rooted with https://github.com/Septrum101/zteOnu with perm telnet
+    just_rooted:
+      ansible_password: Zte521
+      http_port: 8080
+      super_password: "nE7jA%5m"
+
+    target_onu:
+      ansible_host: 192.168.1.1
+      ansible_password: "{{ vault_password | d(hostvars['just_rooted'].ansible_password }}"
+      http_port: 8080
+
+      # used when changing telent ip or port
+      # old_port:
+      # old_host:

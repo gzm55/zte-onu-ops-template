@@ -1,0 +1,120 @@
+---
+- hosts: target_onu 
+  gather_facts: False
+  vars:
+    cmds: []
+  tasks:
+  - name: Print setmac show2
+    no_log: True
+    register: raw_cfgs
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 5
+      command: setmac show2
+    changed_when: False
+    failed_when: raw_cfgs is failed or
+      raw_cfgs.stdout is not search('Current Status', multiline=True)
+
+  - name: Print current region code and region list
+    when: Region is defined
+    register: region_cfgs
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 5
+      command:
+      - upgradetest gdefconf
+      - grep '^[0-9]*:{{Region|quote}}$' /etc/init.d/regioncode || echo $? region not support for {{Region|quote}}
+    changed_when: False
+    failed_when: region_cfgs is failed or
+      region_cfgs.stdout is not search('current version', multiline=True)
+
+  - name: Check Region valid
+    when: Region is defined
+    ansible.builtin.assert:
+      that: region_cfgs.stdout is not search('[0-9] region not support for', multiline=True)
+      msg: Region {{Region}} is not supported
+
+  - name: Check TagParam keys
+    loop: "{{ TagParam | dict2items | map(attribute='key') }}"
+    when:
+    - raw_cfgs.stdout is not search('^ *' + (item|regex_escape) + '\[ID:', multiline=True)
+    ansible.builtin.fail:
+      msg: Tag param on {{ ansible_host }} does not contain the key {{ item }}
+
+  - name: Compare TagParam non set keys
+    loop: "{{ TagParam | dict2items | selectattr('value', 'none') | map(attribute='key') }}"
+    vars:
+      key_id_pat: ^ *{{item|regex_escape}}\[ID. *([0-9]*)\]
+      key_id: "{{ raw_cfgs.stdout
+                  | ansible.builtin.regex_search(key_id_pat, '\\1', multiline=True)
+                  | first }}"
+    when: raw_cfgs.stdout is not search(key_id_pat + ' is not set', multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ [ 'key='+item, 'setmac', 3, key_id ] ] }}"
+
+  - name: Compare TagParam values
+    no_log: True
+    loop: "{{ TagParam | dict2items | rejectattr('value', 'none') }}"
+    vars:
+      key_id_pat: ^ *{{item.key|regex_escape}}\[ID. *([0-9]*)\] +
+      value_pat: is set to {{item.value|regex_escape}}[\r\n]
+      key_id: "{{ raw_cfgs.stdout
+                  | ansible.builtin.regex_search(key_id_pat, '\\1', multiline=True)
+                  | first }}"
+    when: raw_cfgs.stdout is not search(key_id_pat + value_pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ [ 'key='+item.key, 'setmac', 1, key_id, item.value ] ] }}"
+
+  - name: Compare Region code
+    vars:
+      target_regioncode: "{{ region_cfgs.stdout
+        | ansible.builtin.regex_search('^([0-9]+):'+(Region|regex_escape)+'[\\r\\n]', '\\1', multiline=True)
+        | first }}"
+      current_regioncode: "{{ region_cfgs.stdout
+        | ansible.builtin.regex_search('current version .* = ([0-9]+)!', '\\1', multiline=True)
+        | first }}"
+    when:
+    - Region is defined
+    - current_regioncode != target_regioncode
+    set_fact:
+      cmds: "{{ cmds + [ [ 'upgradetest', 'sdefconf', target_regioncode ] ] }}"
+
+  - name: Join each cmd
+    no_log: True
+    when: cmds
+    set_fact:
+      cmds: "{{ cmds | map('map', 'ansible.builtin.quote') | map('join', ' ') }}"
+
+  - name: Fail fast for command list
+    no_log: True
+    when: cmds
+    set_fact:
+      # require reboot to take effect
+      cmds: "{{ [ 'set -uf +e',
+                  '_err=0',
+                  'no_err() { [ $_err = 0 ]; }',
+                  'found_err() { _err=$(( _err < $? ? $? : _err )); }',
+                ]
+                + ( cmds | map('ansible.builtin.regex_replace', '^(.*)$', 'no_err && { \\1; } || found_err'))
+                + [ 'echo rc=$_err', 'reboot' ] }}"
+
+  - name: Update tagparam
+    no_log: True
+    when: cmds
+    register: update_cfg
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #", reboot ]
+      timeout: 10
+      command: "{{ cmds }}"
+    failed_when: update_cfg is failed or update_cfg.stdout is not search("rc=0")
+
+  - name: Tagparam is already updated
+    when: not cmds
+    ansible.builtin.debug:
+      msg: Tagparam is already updated

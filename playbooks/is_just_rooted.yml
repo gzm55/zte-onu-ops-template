@@ -1,0 +1,37 @@
+---
+- hosts: just_rooted 
+  gather_facts: False
+  tasks:
+  - name: Check ports are opened
+    loop:
+    - "{{ ansible_port }}" # telnet
+    - 80 # http web
+    - "{{ http_port | ansible.builtin.mandatory }}" # http api
+    ansible.builtin.wait_for:
+      host: "{{ hostvars[inventory_hostname].ansible_host | ansible.builtin.mandatory }}"
+      port: "{{ item }}"
+      connect_timeout: 2
+      timeout: 3
+    delegate_to: localhost
+
+  - name: telnet login
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 5
+      command:
+      # Do not 'exit' or 'exec' in command list,
+      # cause when the module will always wait the 'prompts' after sending
+      # each command, then send a 'exit' at last
+      # for complex script, try to define main() function
+      - set +e
+      - trap 'echo SIGNAL' TERM QUIT INT HUP
+      - ( exit $? ) && echo OK || echo ERR $?
+    changed_when: False
+    register: login_result
+    failed_when: login_result is failed or
+      login_result.stdout_lines
+      | select('search', '[^#]$')
+      | last
+      | trim != "OK"

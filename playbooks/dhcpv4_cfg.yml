@@ -1,0 +1,187 @@
+---
+- hosts: target_onu 
+  gather_facts: False
+  vars:
+    tbl_lan: LAND
+    tbl_dhcp: DHCPSHostCfg
+    cmds: []
+    need_reboot: False
+  tasks:
+  - name: Default lan ipv4 config
+    set_fact:
+      LAND: "{{ default_LAND
+        | ansible.builtin.combine(LAND|d({}), recursive=True)
+        | ansible.utils.keep_keys(target=[ 'Enable', 'NetMask', 'LanBindEnable' ]) }}"
+
+  - name: Default dhcp ipv4 config
+    set_fact:
+      DHCPSHostCfg: "{{ default_DHCPSHostCfg | ansible.builtin.combine(DHCPSHostCfg|d({}), recursive=True) }}"
+
+  - name: Verify ipv4 config
+    vars:
+      host_prefix: (ansible_host+'/'+LAND.NetMask) | ansible.utils.ipv4('host/prefix')
+    ansible.builtin.assert:
+      that:
+      # lan and dhcp v4 must be enabled 
+      - LAND.Enable | d(1) == 1
+      - DHCPSHostCfg.ServerEnable | d(1) == 1
+
+      # valid ipv4
+      - host_prefix
+      - ansible_host is ansible.utils.ipv4
+      - DHCPSHostCfg.MinAddress is ansible.utils.ipv4
+      - DHCPSHostCfg.MaxAddress is ansible.utils.ipv4
+      - DHCPSHostCfg.IPRouters is ansible.utils.ipv4
+      - DHCPSHostCfg.DNSServers1 is ansible.utils.ipv4
+      - DHCPSHostCfg.DNSServers2 | d('0.0.0.0') is ansible.utils.ipv4
+      - DHCPSHostCfg.DNSServers3 | d('0.0.0.0') is ansible.utils.ipv4
+
+      - DHCPSHostCfg.MinAddress | ansible.utils.ipv4('int')
+        <= DHCPSHostCfg.MaxAddress | ansible.utils.ipv4('int')
+
+      - ansible_host | ansible.utils.ipv4('int')
+        < DHCPSHostCfg.MinAddress | ansible.utils.ipv4('int')
+        or DHCPSHostCfg.MaxAddress | ansible.utils.ipv4('int')
+        < ansible_host | ansible.utils.ipv4('int')
+
+      - DHCPSHostCfg.IPRouters | ansible.utils.ipv4('int')
+        < DHCPSHostCfg.MinAddress | ansible.utils.ipv4('int')
+        or DHCPSHostCfg.MaxAddress | ansible.utils.ipv4('int')
+        < DHCPSHostCfg.IPRouters | ansible.utils.ipv4('int')
+
+      - DHCPSHostCfg.DNSServers1 | ansible.utils.ipv4('int')
+        < DHCPSHostCfg.MinAddress | ansible.utils.ipv4('int')
+        or DHCPSHostCfg.MaxAddress | ansible.utils.ipv4('int')
+        < DHCPSHostCfg.DNSServers1 | ansible.utils.ipv4('int')
+
+      - DHCPSHostCfg.DNSServers2 is not defined
+        or DHCPSHostCfg.DNSServers2 | ansible.utils.ipv4('int')
+        < DHCPSHostCfg.MinAddress | ansible.utils.ipv4('int')
+        or DHCPSHostCfg.MaxAddress | ansible.utils.ipv4('int')
+        < DHCPSHostCfg.DNSServers2 | ansible.utils.ipv4('int')
+
+      - DHCPSHostCfg.DNSServers3 is not defined
+        or DHCPSHostCfg.DNSServers3 | ansible.utils.ipv4('int')
+        < DHCPSHostCfg.MinAddress | ansible.utils.ipv4('int')
+        or DHCPSHostCfg.MaxAddress | ansible.utils.ipv4('int')
+        < DHCPSHostCfg.DNSServers3 | ansible.utils.ipv4('int')
+
+  # now the telnet port should be ready
+  - name: Block to check telnet ip
+    block:
+    - name: Check telnet ip
+      delegate_to: localhost
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[inventory_hostname].ansible_host }}"
+        port: "{{ hostvars[inventory_hostname].ansible_port }}"
+        connect_timeout: 2
+        timeout: 3
+    rescue:
+    - name: Gen cmd for updating telnet port
+      set_fact:
+        cmds: "{{ cmds + [
+                  ['sendcmd', 1, 'DB', 'set', tbl_lan, 0, 'IPAddr', ansible_host ],
+               ] }}"
+
+        # now have to reboot the device to rebuild the whole network
+        # TODO use cli commands to reload the dhcp host and lan bridge
+        need_reboot: True
+
+    - name: fallback to the old ip
+      set_fact:
+        ansible_host: "{{ old_host | d(hostvars['just_rooted'].ansible_host) }}"
+
+  - name: Print table {{ tbl_lan }} and {{ tbl_dhcp }}
+    register: raw_cfgs
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 5
+      command: sendcmd 1 DB p {{ tbl_lan|quote }} && sendcmd 1 DB p {{ tbl_dhcp|quote }}
+    changed_when: False
+    failed_when: raw_cfgs is failed or
+      raw_cfgs.stdout is not search('<Tbl name="' + tbl_lan + '" RowCount=', multiline=True) or
+      raw_cfgs.stdout is not search('<Tbl name="' + tbl_dhcp + '" RowCount=', multiline=True)
+
+  - name: Row counts of two table must be both 1
+    ansible.builtin.assert:
+      that:
+      - raw_cfgs.stdout | ansible.builtin.regex_search('<Tbl name=\"' + tbl_lan + '\" RowCount=\"([0-9]+)\">', '\\1', multiline=True) | first | int == 1
+      - raw_cfgs.stdout | ansible.builtin.regex_search('<Tbl name=\"' + tbl_dhcp + '\" RowCount=\"([0-9]+)\">', '\\1', multiline=True) | first | int == 1
+
+  - name: Split raw logs
+    vars:
+      tbl_array: "{{ raw_cfgs.stdout | ansible.builtin.regex_findall(
+            '<Tbl [^<]*<Row (?:[^<]*<DM [^>]*>)+[^<]*</Row>[^<]*</Tbl>',
+            multiline=True) }}"
+    set_fact:
+      lan_cfg: "{{ tbl_array[0] }}"
+      dhcp_cfg: "{{ tbl_array[1] }}"
+
+  - name: Check lan cfg keys
+    loop: "{{ LAND | dict2items | map(attribute='key') }}"
+    when: lan_cfg is not search('<DM name="' + item + '" val=', multiline=True)
+    ansible.builtin.fail:
+      msg: WARN - key {{ item }} cannot be set in table {{ tbl_lan }}
+    ignore_errors: True
+
+  - name: Check dhcp cfg keys
+    loop: "{{ DHCPSHostCfg | dict2items | map(attribute='key') }}"
+    when:
+    - dhcp_cfg is not search('<DM name="' + item + '" val=', multiline=True)
+    ansible.builtin.fail:
+      msg: WARN - key {{ item }} cannot be set in table {{ tbl_dhcp }}
+    ignore_errors: True
+
+  - name: Compare lan cfg
+    loop: "{{ LAND | dict2items }}"
+    when:
+    - lan_cfg is search('<DM name="' + item.key + '" val=', multiline=True)
+    - lan_cfg is not search('<DM name="' + item.key + '" val="' + (item.value | string) + '"/>', multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl_lan, 0, item.key, item.value] ] }}"
+
+  - name: Compare dhcp cfg
+    loop: "{{ DHCPSHostCfg | dict2items }}"
+    when:
+    - dhcp_cfg is search('<DM name="' + item.key + '" val=', multiline=True)
+    - dhcp_cfg is not search('<DM name="' + item.key + '" val="' + (item.value | string) + '"/>', multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl_dhcp, 0, item.key, item.value] ] }}"
+
+  - name: Join each cmd
+    when: cmds
+    set_fact:
+      cmds: "{{ ( cmds + [ ['sendcmd', 1, 'DB', 'save'] ] )
+                | map('map', 'ansible.builtin.quote')
+                | map('join', ' ')
+                | map('ansible.builtin.regex_replace', '^(sendcmd 1 DB set .*)$', '\\1 >/dev/null') }}"
+
+  - name: Fail fast for command list
+    when: cmds
+    set_fact:
+      cmds: "{{ [ 'set -uf +e',
+                  '_err=0',
+                  'no_err() { [ $_err = 0 ]; }',
+                  'found_err() { _err=$(( _err < $? ? $? : _err )); }',
+                ]
+                + ( cmds | map('ansible.builtin.regex_replace', '^(.*)$', 'no_err && { \\1; } || found_err'))
+                + [ 'echo rc=$_err' ]
+                + (need_reboot | ternary(['reboot'], [])) }}"
+
+  - name: Update {{ tbl }}
+    when: cmds
+    register: update_cfg
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #", 'reboot' ]
+      timeout: 10
+      command: "{{ cmds }}"
+    failed_when: update_cfg is failed or update_cfg.stdout is not search("rc=0")
+
+  - name: Table {{ tbl_lan }} and {{ tbl_dhcp }} are already updated
+    when: not cmds
+    ansible.builtin.debug:
+      msg: Table {{ tbl_lan }} and {{ tbl_dhcp }} are already updated

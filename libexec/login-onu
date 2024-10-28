@@ -1,0 +1,24 @@
+#!/bin/sh
+
+set -euf
+[ "${DEBUG-}" != true ] || set -x
+
+ansible_host="${1:-target_onu}"
+
+if ! hash ansible 2>/dev/null; then
+  echo "[ERROR] cannot find command ansible" >&2
+  exit 1
+fi
+
+unset h p u psw
+eval "$( ansible -m raw -c local -a \
+	  'printf "%s %s %s %s" h={{ansible_host|quote|quote}} p={{ansible_port|quote|quote}} u={{ansible_user|quote|quote}} psw={{ansible_password|quote|quote}}' \
+	  "$ansible_host" \
+	| tail -n 1)"
+
+if [ -z "${h-}" ] || [ -z "${p-}" ] || [ -z "${u-}" ] || [ -z "${psw-}" ]; then
+  echo "[ERROR] target onu does not exist: $ansible_host" >&2
+  exit 1
+fi
+
+exec expect -f "$0.exp" "$h" "$p" "$u" "$psw"

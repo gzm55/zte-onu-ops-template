@@ -1,0 +1,6 @@
+upload
+backup
+
+# pixi environments
+.pixi
+*.egg-info

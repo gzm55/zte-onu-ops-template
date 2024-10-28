@@ -1,0 +1,52 @@
+#!/bin/sh
+
+# TODO re-implement using python, remove dependency to posix shell
+
+set -euf
+[ "${DEBUG-}" != true ] || set -x
+
+: "${TFTPD_PORT:=6969}"
+TFTPD_PORT=$(( TFTPD_PORT + 0 ))
+export TFTPD_PORT
+
+if [ $TFTPD_PORT -le 1024 ] || [ $TFTPD_PORT -gt 65535 ]; then
+  echo "[ERROR] TFTPD_PORT should be in [1025, 65535], but is set to $TFTPD_PORT now" >&2
+  exit 1
+fi
+
+if ! hash py3tftp 2>/dev/null; then
+  echo "[ERROR] cannot find command py3tftp" >&2
+  exit 2
+fi
+
+prj=$(cd -- "$(dirname -- "$0")/.."; pwd)
+upload_base="$prj/upload/$(date +%s)"
+curr_dir=$(pwd)
+mkdir -p -- "$upload_base"
+
+cd -- "$upload_base" >/dev/null
+# start tftpd daemon in background
+py3tftp -p "$TFTPD_PORT" -l ../tftpd.log &
+cd -- "$curr_dir"
+
+tftpd_pid=$!
+sleep 1
+if ! kill -0 $tftpd_pid; then
+  echo "[ERROR] start tftpd failed!" >&2
+  rmdir -- "$upload_base" || :
+  exit 3
+fi
+
+err=0
+"$@" || err=$?
+
+trap 'exit 0' TERM # just exit when killed, avoid error log of 'Terminated: 15'
+kill "$tftpd_pid"
+
+# remove empty dir
+upload_file_c=$(find "$upload_base" -type f | grep -c .) || [ $? = 1 ]
+if [ -n "${upload_file_c-}" ] && [ "$upload_file_c" = 0 ]; then
+  rmdir -- "$upload_base" || :
+fi
+
+exit $err

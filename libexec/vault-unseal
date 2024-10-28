@@ -1,0 +1,27 @@
+#!/bin/sh
+
+set -euf
+[ "${DEBUG-}" != true ] || set -x
+
+if ! hash ansible 2>/dev/null; then
+  echo "[ERROR] cannot find command ansible" >&2
+  exit 1
+fi
+
+cd -- "$(dirname -- "$0")/.."
+
+if ansible -m assert -a 'that=unsealed' target_onu >/dev/null; then
+  echo '[INFO] already unsealed'
+  exit 0
+fi
+
+# input into vault-id: zte-modem-ops user=$USER
+vault-keyring-client --set
+
+# check again
+if ansible -m assert -a 'that=unsealed' target_onu >/dev/null; then
+  echo '[INFO] unseal successfully'
+else
+  echo '[ERROR] password in zte-modem-ops is incorrect!' >&2
+  exit 1
+fi

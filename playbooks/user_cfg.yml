@@ -1,0 +1,110 @@
+---
+- hosts: target_onu 
+  gather_facts: False
+  vars:
+    tbl: DevAuthInfo
+    cmds: []
+    cmds_disable: []
+  tasks:
+  - name: Print table {{ tbl }}
+    register: devauth_cfg
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 5
+      command: sendcmd 1 DB p {{ tbl }}
+    changed_when: False
+    failed_when: devauth_cfg is failed or
+      devauth_cfg.stdout is not search('<Tbl name="' + tbl + '" RowCount=', multiline=True)
+
+  - name: row count should be at least 1
+    set_fact:
+      row_count: "{{ devauth_cfg.stdout | ansible.builtin.regex_search('<Tbl name=\"' + tbl + '\" RowCount=\"([0-9]+)\">', '\\1', multiline=True) | first | int }}"
+    failed_when: row_count <= 0
+
+  - name: Check user cfg keys
+    loop: "{{ DevAuthInfo_0 | dict2items | map(attribute='key')
+              | union(DevAuthInfo_1 | dict2items | map(attribute='key')) }}"
+    when:
+    - devauth_cfg.stdout is not search('<DM name="' + item + '" val=', multiline=True)
+    ansible.builtin.fail:
+      msg: WARN - key {{ item }} cannot be set in table {{ tbl }}
+    ignore_errors: True
+
+  - name: Split rows
+    set_fact:
+      devauth_cfg_arr: "{{ devauth_cfg.stdout
+      | ansible.builtin.regex_findall('<Row [^>]*>[^<]+(?:<DM [^>]*/>[^<]*)+[^<]+</Row>', multiline=True) }}"
+    failed_when: devauth_cfg_arr | length != row_count
+
+  # user and password would always be updated if masked
+  # compile and use tool from https://www.right.com.cn/forum/thread-8390260-1-1.html can avoid the mask
+  - name: compare super user cfg
+    no_log: True
+    loop: "{{ DevAuthInfo_0 | dict2items }}"
+    when:
+    - devauth_cfg_arr[0] is search('<DM name="' + item.key + '" val=', multiline=True)
+    - devauth_cfg_arr[0] is not search('<DM name="' + item.key + '" val="' + (item.value | string) + '"/>', multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: compare normal user cfg
+    no_log: True
+    loop: "{{ DevAuthInfo_1 | dict2items }}"
+    when:
+    - row_count >= 2
+    - devauth_cfg_arr[1] is search('<DM name="' + item.key + '" val=', multiline=True)
+    - devauth_cfg_arr[1] is not search('<DM name="' + item.key + '" val="' + (item.value | string) + '"/>', multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 1, item.key, item.value] ] }}"
+
+  - name: disable from the 3rd row
+    loop: "{{ range(2, row_count) | list }}"
+    when: devauth_cfg_arr[item] is not search('<DM name="Enable" val="0"/>', multiline=True)
+    set_fact:
+      cmds_disable: "{{ cmds_disable + [ ['sendcmd', 1, 'DB', 'set', tbl, item, 'Enable', 0] ] }}"
+
+  - name: only the first 2 rows are enabled
+    when: cmds_disable
+    ansible.builtin.fail:
+      msg: WARN - found {{ row_count }} rows in {{ tbl }}, only the first two rows are enabled
+    ignore_errors: True
+
+  - name: join each cmd
+    no_log: True
+    when: cmds or cmds_disable
+    set_fact:
+      cmds: "{{ ( cmds + cmds_disable + [ ['sendcmd', 1, 'DB', 'save'] ] )
+                | map('map', 'ansible.builtin.quote')
+                | map('join', ' ')
+                | map('ansible.builtin.regex_replace', '^(sendcmd 1 DB set .*)$', '\\1 >/dev/null') }}"
+
+  - name: Fail fast for command list
+    when: cmds
+    no_log: True
+    set_fact:
+      cmds: "{{ [ 'set -uf +e',
+                  '_err=0',
+                  'no_err() { [ $_err = 0 ]; }',
+                  'found_err() { _err=$(( _err < $? ? $? : _err )); }',
+                ]
+                + ( cmds | map('ansible.builtin.regex_replace', '^(.*)$', 'no_err && { \\1; } || found_err'))
+                + [ 'echo rc=$_err' ] }}"
+
+  - name: Update {{ tbl }}
+    when: cmds
+    no_log: True
+    register: update_cfg
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 10
+      command: "{{ cmds }}"
+    failed_when: update_cfg is failed or update_cfg.stdout is not search("rc=0")
+
+  - name: Table {{ tbl }} is already updated
+    when: not cmds
+    ansible.builtin.debug:
+      msg: Table {{ tbl }} is already updated

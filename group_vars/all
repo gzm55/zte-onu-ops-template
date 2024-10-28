@@ -1,0 +1,23 @@
+ansible_host: 192.168.1.1
+ansible_port: 23
+ansible_user: root
+
+# old password for updating telnet password
+# to update telnet password, execute 'pixi run vault_edit_vault',
+# then copy the previous vault_password to vault_old_password and
+# set the new vault_password
+old_password: "{{ vault_old_password | d }}"
+
+default_LAND:
+  Enable: 1
+  NetMask: 255.255.255.0
+
+default_DHCPSHostCfg:
+  ServerEnable: 1
+  SubnetMask: "{{ LAND.NetMask }}"
+  MinAddress: "{{ ansible_host | ansible.utils.ipmath(9) }}" # keep space for static assigned ip
+  MaxAddress: "{{ (ansible_host+'/'+LAND.NetMask) | ansible.utils.ipv4('last_usable') }}"
+  IPRouters: "{{ ansible_host }}"
+  DNSServers1: "{{ ansible_host }}"
+
+WANC: []

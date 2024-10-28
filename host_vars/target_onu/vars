@@ -1,0 +1,76 @@
+TelnetCfg:
+  Wan_Enable: 0
+  Lan_Enable: 1
+  Max_Con_Num: 10
+  ExitTime: 1000
+  InitSecLvl: 3
+
+DevAuthInfo_0:
+  Enable: 1
+  # level=1 for super user, level=2 for normal user
+  Level: 1
+  User: telecomadmin
+  Pass: "{{ vault_super_password }}"
+
+DevAuthInfo_1:
+  Enable: 1
+  Level: 2
+  User: useradmin
+  Pass: "{{ vault_normal_password }}"
+
+LAND:
+  # LanBindEnable=0 means we CAN bind wan to lan ports
+  LanBindEnable: 0
+
+DHCPSHostCfg:
+  Configurable: 1
+  DNSServers2: 0.0.0.0
+  DNSServers3: 0.0.0.0
+  EnableOpt125: 1
+  EnableOpt60: 1
+
+#Region: Beijing
+
+# set to null to delete the value from tagparam
+#TagParam:
+  #PONLOID: "{{ vault_PONLOID }}"
+  #PONPASSWD: "{{ vault_PONPASSWD }}"
+
+MgtServer:
+  URL: http://127.0.0.1
+  PeriodicInformEnable: 0
+  Tr069Enable: 0
+
+PDTCTUSERINFO:
+  Status: 0
+  Result: 1
+
+WANC:
+- _idx: 1 # must already exists
+
+  # control WANCType, True for PPPoE, false for IPoE
+  # cannot set the target WANCType from telnet, must change from web
+  # default True
+  #_is_pppoe: True
+
+  # control IPMode, at least set one of ipv4 or ipv6, default enable all
+  #_has_ipv4: True
+  #_has_ipv6: True
+
+  # WANCName will also affect ConnType, MediaType, WancIndex, StrServList, ServList, VLANID, default Priority(0 for internet, 4 for other)
+  # pattern: wcidx_serv_conn_'VID'_vid
+  # serv part: INTERNET, Other
+  # connn: B, R
+  # vid: must be empty or a vlan id in [1, 4096]
+  WANCName: 2_INTERNET_B_VID_13
+
+  Enable: 1
+
+  #Priority:
+  #DSCP:
+  #DSCP6:
+
+  #MCVLANID: -1
+
+  IsDefGW: 1
+  IsDefGW6: 1

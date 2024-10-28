@@ -1,0 +1,147 @@
+---
+- hosts: target_onu 
+  gather_facts: False
+  vars:
+    tbl: TelnetCfg
+    cmds: []
+  tasks:
+  - name: Block to check telnet port
+    block:
+    - name: Check telnet port
+      delegate_to: localhost
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[inventory_hostname].ansible_host }}"
+        port: "{{ hostvars[inventory_hostname].ansible_port }}"
+        connect_timeout: 2
+        timeout: 3
+    rescue:
+    - name: Gen cmd for updating telnet port
+      set_fact:
+        # set account for both lan and wan
+        cmds: "{{ cmds + [
+                  ['sendcmd', 1, 'DB', 'set', tbl, 0, 'TSLan_Port', ansible_port ],
+               ] }}"
+    - name: fallback to the old port
+      set_fact:
+        ansible_port: "{{ old_port | d(hostvars['just_rooted'].ansible_port) }}"
+
+  - name: Print table {{ tbl }}
+    block:
+    - name: Print table {{ tbl }}
+      register: telnet_cfg
+      ansible.netcommon.telnet:
+        login_prompt: "Login: "
+        port: "{{ ansible_port }}"
+        prompts: [ " #" ]
+        timeout: 5
+        # only print the first row
+        command: sendcmd 1 DB p {{ tbl }} | sed '/<\/Row>/q'
+      changed_when: False
+      failed_when: telnet_cfg is failed or
+        telnet_cfg.stdout is not search('<Tbl name="' + tbl + '" RowCount=', multiline=True)
+    rescue:
+    - name: Gen cmd for updating account
+      set_fact:
+        # set account for both lan and wan
+        cmds: "{{ cmds + [
+                  ['sendcmd', 1, 'DB', 'set', tbl, 0, 'TSLan_UName', ansible_user ],
+                  ['sendcmd', 1, 'DB', 'set', tbl, 0, 'TSLan_UPwd', ansible_password],
+                  ['sendcmd', 1, 'DB', 'set', tbl, 0, 'TS_UName', ansible_user],
+                  ['sendcmd', 1, 'DB', 'set', tbl, 0, 'TS_UPwd', ansible_password],
+               ] }}"
+    - name: fallback to the old account
+      set_fact:
+        ansible_user: "{{ old_user | d(hostvars['just_rooted'].ansible_user) }}"
+        ansible_password: "{{ old_password | d(hostvars['just_rooted'].ansible_password) }}"
+    - name: Print table {{ tbl }} with the old account
+      register: telnet_cfg
+      ansible.netcommon.telnet:
+        login_prompt: "Login: "
+        port: "{{ ansible_port }}"
+        prompts: [ " #" ]
+        timeout: 5
+        command: sendcmd 1 DB p {{ tbl }} | sed '/<\/Row>/q'
+      changed_when: False
+      failed_when: telnet_cfg is failed or
+        telnet_cfg.stdout is not search('<Tbl name="' + tbl + '" RowCount=', multiline=True)
+
+  - name: row count should be at least one
+    set_fact:
+      row_count: "{{ telnet_cfg.stdout | ansible.builtin.regex_search('<Tbl name=\"' + tbl + '\" RowCount=\"([0-9]+)\">', '\\1', multiline=True) | first | int }}"
+    failed_when: row_count <= 0
+
+  - name: Check telnet cfg keys
+    loop: "{{ TelnetCfg | dict2items | map(attribute='key') }}"
+    when:
+    - telnet_cfg.stdout is not search('<DM name="' + item + '" val=', multiline=True)
+    ansible.builtin.fail:
+      msg: WARN - key {{ item }} cannot be set in table {{ tbl }}
+    ignore_errors: True
+
+  - name: compare telnet cfg
+    no_log: True
+    loop: "{{ TelnetCfg | dict2items }}"
+    when:
+    - telnet_cfg.stdout is search('<DM name="' + item.key + '" val=', multiline=True)
+    - telnet_cfg.stdout is not search('<DM name="' + item.key + '" val="' + (item.value | string) + '"/>', multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: only the first row is enabled
+    when: row_count > 1
+    ansible.builtin.fail:
+      msg: WARN - found {{ row_count }} rows in {{ tbl }}, only the first one is enabled
+    ignore_errors: True
+
+  - name: disable from the 2nd row
+    loop: "{{ range(1, row_count) }}"
+    set_fact:
+      cmds: "{{ cmds + [
+                ['sendcmd', 1, 'DB', 'set', tbl, item, 'Wan_Enable', 0],
+                ['sendcmd', 1, 'DB', 'set', tbl, item, 'Lan_Enable', 0]
+             ] }}"
+
+  - name: join each cmd
+    no_log: True
+    when: cmds
+    set_fact:
+      cmds: "{{ cmds
+                | map('map', 'ansible.builtin.quote')
+                | map('join', ' ')
+                | map('ansible.builtin.regex_replace', '^(sendcmd 1 DB set .*)$', '\\1 >/dev/null') }}"
+
+  - name: Fail fast for command list
+    no_log: True
+    when: cmds
+    set_fact:
+      # PS 1: no_err && action || found_err : this is ok to disable SC2015 warning
+      #       (true, true) -> (no_err, action)
+      #       (true, false) -> (no_err, action, found_err)
+      #       (false, *) -> (no_err, found_err)
+      # PS 2: after update TelnetCfg and save, the telnetd should be auto restarted
+      cmds: "{{ [ 'set -uf +e',
+                  '_err=0',
+                  'no_err() { [ $_err = 0 ]; }',
+                  'found_err() { _err=$(( _err < $? ? $? : _err )); }',
+                ]
+                + ( cmds | map('ansible.builtin.regex_replace', '^(.*)$', 'no_err && { \\1; } || found_err'))
+                + [ 'echo rc=$_err', 'sendcmd 1 DB save; killall telnetd; echo FAIL to restart telnetd' ] }}"
+
+  - name: Update {{ tbl }}
+    no_log: True
+    when: cmds
+    register: update_cfg
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #", '[+] sendcmd 1 DB save' ]
+      timeout: 10
+      command: "{{ cmds }}"
+    failed_when: update_cfg is failed or
+      update_cfg.stdout is not search("rc=0") or
+      update_cfg.stdout is search("FAIL to restart telnetd")
+
+  - name: Table {{ tbl }} is already updated
+    when: not cmds
+    ansible.builtin.debug:
+      msg: Table {{ tbl }} is already updated

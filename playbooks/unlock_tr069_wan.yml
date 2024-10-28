@@ -1,0 +1,72 @@
+---
+- hosts: target_onu 
+  gather_facts: False
+  vars:
+    cmds: []
+  tasks:
+  - name: Print tables
+    register: raw_cfgs
+    check_mode: False
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 5
+      command: sendcmd 1 DB p WANC
+    changed_when: False
+    failed_when: raw_cfgs is failed or
+      raw_cfgs.stdout is not search('<Tbl name="WANC"', multiline=True)
+
+  - name: Row counts
+    set_fact:
+      count: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"WANC\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
+
+  - name: remove all TR069 entries in WANC table
+    loop: "{{ range(0, count) }}"
+    vars:
+      pat_tr069: <Row No="{{item}}">(?:[^<]*<DM)*[^<]*<DM name="StrServList" val="TR069"
+    when: raw_cfgs.stdout is search(pat_tr069, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', 'ServList', 8] ] }}"
+
+  - name: Join each cmd
+    when: cmds
+    set_fact:
+      cmds: "{{ cmds
+                | map('map', 'ansible.builtin.quote')
+                | map('join', ' ')
+                | map('ansible.builtin.regex_replace', '^(sendcmd 1 DB set .*)$', '\\1 >/dev/null') }}"
+
+  - name: Fail fast for command list
+    when: cmds
+    set_fact:
+      cmds: "{{ [ 'set -uf +e',
+                  '_err=0',
+                  'no_err() { [ $_err = 0 ]; }',
+                  'found_err() { _err=$(( _err < $? ? $? : _err )); }',
+                ]
+                + ( cmds | map('ansible.builtin.regex_replace', '^(.*)$', 'no_err && { \\1; } || found_err'))
+                + [ 'echo rc=$_err' ] }}"
+
+  - name: Dump cmds for check mode
+    when: cmds and ansible_check_mode
+    ansible.builtin.debug:
+      var: cmds
+
+  - name: Update tagparam
+    when: cmds and not ansible_check_mode
+    register: update_wanc
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 10
+      command: "{{ cmds }}"
+    failed_when: update_wanc is failed or update_cfg.stdout is not search("rc=0")
+
+  - name: No TR069 wan ports
+    when: not cmds
+    ansible.builtin.debug:
+      msg: No TR069 wan ports

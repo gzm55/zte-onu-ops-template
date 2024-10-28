@@ -1,0 +1,46 @@
+---
+- hosts: target_onu 
+  gather_facts: False
+  tasks:
+  - name: detect local ip
+    delegate_to: localhost
+    ansible.builtin.setup:
+      gather_subset: [ "all_ipv4_addresses" ]
+
+  - name: Default lan ipv4 config
+    set_fact:
+      LAND: "{{ default_LAND | ansible.builtin.combine(LAND|d({}), recursive=True) }}"
+
+  - name: get tftpd ip and port
+    vars:
+      host_prefix: "{{ (ansible_host+'/'+LAND.NetMask) | ansible.utils.ipv4('host/prefix') }}"
+    set_fact:
+      tftpd_port: "{{ lookup('env', 'TFTPD_PORT') | ansible.builtin.mandatory }}"
+      all_ip: "{{ ansible_all_ipv4_addresses | ansible.utils.ipv4(host_prefix) + ansible_all_ipv4_addresses | reject('match', '127.') | ansible.builtin.difference(ansible_all_ipv4_addresses | ansible.utils.ipv4(host_prefix)) }}"
+    failed_when: not all_ip or tftpd_port <= 0
+
+  - name: backup config files
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 3600 # 60 min
+      command:
+      - set +e
+      - trap 'echo SIGNAL' TERM QUIT INT HUP
+
+      - ip=''
+      - for i in {{ all_ip | join(' ') }}; do ping $i -T 0 -c 1 >/dev/null 2>/dev/null && { ip=$i; break; }; done
+
+      - |-
+        test -n "$ip" && gzip -c /dev/mtd0 \
+        | tftp -p -l - -r mtd0.gz "$ip" {{ tftpd_port|quote }}
+
+      - ( exit $? ) && echo OK || echo ERR $?
+    changed_when: False
+    register: backup_result
+    failed_when: backup_result is failed or
+      backup_result.stdout_lines
+      | select('search', '[^#]$')
+      | last
+      | trim != "OK"

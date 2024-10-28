@@ -1,0 +1,42 @@
+[project]
+authors = ["James Z.M. Gao <gaozm55@gmail.com>"]
+channels = ["conda-forge"]
+description = "privision and ops the zte onus"
+name = "zte onu ops"
+platforms = ["osx-arm64", "linux-64"]
+version = "0.1.0"
+
+[pypi-options]
+index-url = "http://mirrors.aliyun.com/pypi/simple"
+
+[activation.env]
+ANSIBLE_VAULT_PASSWORD_FILE = "$(which vault-keyring-client)"
+
+[tasks]
+00_is_just_rooted = "ansible-playbook playbooks/is_just_rooted.yml"
+01_config_telnetd = "ansible-playbook playbooks/telnetd_cfg.yml"
+02_config_users = "ansible-playbook playbooks/user_cfg.yml"
+03_config_dhcpv4 = "ansible-playbook playbooks/dhcpv4_cfg.yml"
+04_config_device_id = "ansible-playbook playbooks/device_id.yml"
+05_register_and_optimize = "ansible-playbook playbooks/register_and_optimize.yml"
+
+backup_config = "libexec/run-with-tftpd ansible-playbook playbooks/backup_configs.yml"
+backup_flash = "libexec/run-with-tftpd ansible-playbook playbooks/backup_flash.yml"
+
+vault_unseal = "libexec/vault-unseal"
+vault_edit_vault = "action=edit; f=host_vars/target_onu/vault; test -e $f || action=create; ansible-vault $action $f"
+vault_dump_user_psw = "libexec/dump-user-psw"
+
+login_onu = "libexec/login-onu"
+
+[dependencies]
+ansible = ">=10.5.0,<11"
+keyring = ">=25.4.1,<26"
+netaddr = ">=1.3.0,<2"
+
+[pypi-dependencies]
+py3tftp = ">=1.3.0, <2"
+vault-keyring-client = { git = "https://github.com/jakob1379/vault-keyring-client.git", rev = "e455c2456988f88bb03e4afb58f8852c154a9356" } # 0.2.4
+
+[target.linux-64.dependencies]
+expect = ">=5.45.4,<6"

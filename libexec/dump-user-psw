@@ -1,0 +1,23 @@
+#!/bin/sh
+
+set -euf
+[ "${DEBUG-}" != true ] || set -x
+
+# web auth does not check the login user, only the password which binds to normal or super user
+user="${1:-normal}"
+ansible_host="${2:-target_onu}"
+
+if ! hash ansible 2>/dev/null; then
+  echo "[ERROR] cannot find command ansible" >&2
+  exit 1
+fi
+
+if [ "$user" = super ]; then
+  ansible -m raw -c local -a 'printf {{DevAuthInfo_0.Pass|quote}}' "$ansible_host"
+else
+  ansible -m raw -c local -a 'printf {{DevAuthInfo_1.Pass|quote}}' "$ansible_host"
+fi \
+| tail -n 1 \
+| tr -d '\n'
+
+! [ -t 1 ] || printf '\n'
