@@ -7,6 +7,7 @@
   - name: Print setmac show2
     no_log: True
     register: raw_cfgs
+    check_mode: False
     ansible.netcommon.telnet:
       login_prompt: "Login: "
       port: "{{ ansible_port }}"
@@ -20,6 +21,7 @@
   - name: Print current region code and region list
     when: Region is defined
     register: region_cfgs
+    check_mode: False
     ansible.netcommon.telnet:
       login_prompt: "Login: "
       port: "{{ ansible_port }}"
@@ -102,9 +104,14 @@
                 + ( cmds | map('ansible.builtin.regex_replace', '^(.*)$', 'no_err && { \\1; } || found_err'))
                 + [ 'echo rc=$_err', 'reboot' ] }}"
 
+  - name: Dump cmds for check mode
+    when: cmds and ansible_check_mode
+    ansible.builtin.debug:
+      var: cmds
+
   - name: Update tagparam
     no_log: True
-    when: cmds
+    when: cmds and not ansible_check_mode
     register: update_cfg
     ansible.netcommon.telnet:
       login_prompt: "Login: "

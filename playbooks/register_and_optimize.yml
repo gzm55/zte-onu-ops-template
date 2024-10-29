@@ -6,6 +6,7 @@
   tasks:
   - name: Print tables
     register: raw_cfgs
+    check_mode: False
     ansible.netcommon.telnet:
       login_prompt: "Login: "
       port: "{{ ansible_port }}"
@@ -148,8 +149,13 @@
                 + ( cmds | map('ansible.builtin.regex_replace', '^(.*)$', 'no_err && { \\1; } || found_err'))
                 + [ 'echo rc=$_err' ] }}"
 
+  - name: Dump cmds for check mode
+    when: cmds and ansible_check_mode
+    ansible.builtin.debug:
+      var: cmds
+
   - name: Update tagparam
-    when: cmds
+    when: cmds and not ansible_check_mode
     register: update_cfg
     ansible.netcommon.telnet:
       login_prompt: "Login: "

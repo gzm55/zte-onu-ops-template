@@ -93,6 +93,7 @@
 
   - name: Print table {{ tbl_lan }} and {{ tbl_dhcp }}
     register: raw_cfgs
+    check_mode: False
     ansible.netcommon.telnet:
       login_prompt: "Login: "
       port: "{{ ansible_port }}"
@@ -170,8 +171,13 @@
                 + [ 'echo rc=$_err' ]
                 + (need_reboot | ternary(['reboot'], [])) }}"
 
+  - name: Dump cmds for check mode
+    when: cmds and ansible_check_mode
+    ansible.builtin.debug:
+      var: cmds
+
   - name: Update {{ tbl }}
-    when: cmds
+    when: cmds and not ansible_check_mode
     register: update_cfg
     ansible.netcommon.telnet:
       login_prompt: "Login: "
