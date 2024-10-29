@@ -8,7 +8,7 @@ ungrouped:
 
     target_onu:
       ansible_host: 192.168.1.1
-      ansible_password: "{{ vault_password | d(hostvars['just_rooted'].ansible_password }}"
+      ansible_password: "{{ vault_password | d(hostvars['just_rooted'].ansible_password) }}"
       http_port: 8080
 
       # used when changing telent ip or port
