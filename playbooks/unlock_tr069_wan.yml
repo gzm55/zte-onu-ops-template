@@ -29,7 +29,10 @@
       pat_tr069: <Row No="{{item}}">(?:[^<]*<DM)*[^<]*<DM name="StrServList" val="TR069"
     when: raw_cfgs.stdout is search(pat_tr069, multiline=True)
     set_fact:
-      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', 'ServList', 8] ] }}"
+      cmds: "{{ cmds + [
+          ['sendcmd', 1, 'DB', 'set', 'WANC', item, 'ServList', 8],
+          ['sendcmd', 1, 'DB', 'set', 'WANC', item, 'StrServList', 'OTHER']
+        ] }}"
 
   - name: Join each cmd
     when: cmds
@@ -64,7 +67,7 @@
       prompts: [ " #" ]
       timeout: 10
       command: "{{ cmds }}"
-    failed_when: update_wanc is failed or update_cfg.stdout is not search("rc=0")
+    failed_when: update_wanc is failed or update_wanc.stdout is not search("rc=0")
 
   - name: No TR069 wan ports
     when: not cmds
