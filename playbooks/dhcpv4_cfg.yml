@@ -154,7 +154,9 @@
   - name: Join each cmd
     when: cmds
     set_fact:
-      cmds: "{{ ( cmds + [ ['sendcmd', 1, 'DB', 'save'] ] )
+      cmds: "{{ ( cmds
+                  + [ ['sendcmd', 1, 'DB', 'save'] ]
+                  + (need_reboot | ternary([], [ ['killall', 'ipv4protocol'] ])) )
                 | map('map', 'ansible.builtin.quote')
                 | map('join', ' ')
                 | map('ansible.builtin.regex_replace', '^(sendcmd 1 DB set .*)$', '\\1 >/dev/null') }}"

@@ -115,16 +115,13 @@
       key: "{{ item[1].key }}"
       val: "{{ item[1].value }}"
       patV: <Row No="{{idx}}">(?:[^<]*<DM)*[^<]*<DM name="{{key|e|regex_escape}}" val="{{val|e|regex_escape}}"
-      pat0: <Row No="{{idx}}">(?:[^<]*<DM)*[^<]*<DM name="{{key|e|regex_escape}}" val="0"
     when:
     - WANC
     - key == 'VLANID'
-    - raw_cfgs.stdout is not search(patV, multiline=True)
     ansible.builtin.assert:
       that:
-      - val != "0"
-      - raw_cfgs.stdout is not search(pat0, multiline=True)
-      msg: Change from untag or into untag on web
+      - raw_cfgs.stdout is search(patV, multiline=True)
+      msg: Set tag id or untag for wan ports on web
 
   - name: Compare values
     # [ [_idx, {key:.., value: ...} ] ]
