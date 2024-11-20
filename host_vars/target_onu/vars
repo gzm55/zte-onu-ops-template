@@ -22,6 +22,13 @@ LAND:
   # LanBindEnable=0 means we CAN bind wan to lan ports
   LanBindEnable: 0
 
+  # multicast snooping
+  IGMPSNPEnable: 1 # IPv4 IGMP
+  MLDSNPEnable: 1 # IPv6 MLD
+
+  # multicast proxy version
+  IgmpQueryVersion: 3 # IGMP v3, implies MLD v2
+
 DHCPSHostCfg:
   Configurable: 1
   DNSServers2: 0.0.0.0
@@ -44,6 +51,36 @@ MgtServer:
 PDTCTUSERINFO:
   Status: 0
   Result: 1
+
+# Led status
+WLCInfo:
+  # 1: close all led, 0: open all led
+  WLCStatus: 1
+
+FWBase:
+  FwConnMaxEnable: 0 # disable FwConntrackMax
+  ConntrackMax: 0
+
+# Up QOS
+#QOSBasic:
+  #Enable: 0 # disable all qos on onu
+
+# Down QOS
+#QOSDownBasic:
+  #Enable: 0 # disable all qos on onu
+
+# advanced nat options
+# default: IsSIPAlg and IsSNMPAlg is 0, others 1
+#FWALG:
+  #IsSIPAlg: 0
+  #IsFTPAlg: 0
+  #IsH323Alg: 0
+  #IsRTSPAlg: 0
+  #IsL2TPAlg: 0
+  #IsPPTPAlg: 0
+  #IsTFTPAlg: 0
+  #IsSNMPAlg: 0
+  #IsIPSECAlg: 0
 
 WANC:
 - _idx: 1 # must already exists
@@ -74,3 +111,49 @@ WANC:
 
   IsDefGW: 1
   IsDefGW6: 1
+
+SNTP:
+  Enable: 1
+  # capture from iptv, depends on 5_INTERNET_B_VID_0 wan port
+  #NtpServer1: xxx
+  #PollTimeInterval: 86400  # 1 day
+  #LocalTimeZone: "GMT+08:00"
+  #LocalTimeZoneName: "Beijing, Chongqing, Hong Kong, Urumqi"
+  #NTPServerType: 0  # 0 for request ntp from internet wan, 2 for tr069 wan
+
+IGMPProxy:
+  Enable: 1
+  #WanCID: <view name in WANC>
+  IgmpVersion: "{{ LAND is defined | ternary(LAND.IgmpQueryVersion | d(3), 3) }}"
+  IgmpQueryVersion: "{{ LAND is defined | ternary(LAND.IgmpQueryVersion | d(3), 3) }}"
+
+MLDProxyCfg:
+  Enable: 1
+  #WanCID: "{{ IGMPProxy.WanCID }}"
+  MldVersion: "{{ (IGMPProxy.IgmpVersion == 3) | ternary(2, 1) }}"
+
+#UPnPCfg:
+  #EnableUPnPIGD: 0
+
+# Config plugins managed by appmgr service of saf openwrt
+
+# For each plugin name,
+# - set to True to enable the plugin,
+# - set to False to disable,
+# # unset the plugin to leave it untouched.
+#
+# some purpose of plugins are tested by the author of https://www.right.com.cn/forum/forum.php?mod=viewthread&tid=8393621
+Plugins:
+  # speedup for game
+  gamespeederv3: False
+
+  # ctc xiaoyi app plugins
+  b01odmv3: False # view device number
+  extccv3: False # config the router
+  #inter_conndv3: False # config wifi, always startup on by appmgr to get device list
+
+  opmaintainv3: False # True # status monitor, will start diagapps/opmonitord in host linux to get infomation
+
+  u01v3: True
+  redictv3: True # seems to config iptables, now two empty tables: ct_redict_dnat, ct_redict_reject
+  xrobotv3: False # report onu device info

@@ -12,6 +12,10 @@ index-url = "http://mirrors.aliyun.com/pypi/simple"
 [activation.env]
 ANSIBLE_VAULT_PASSWORD_FILE = "$(which vault-keyring-client)"
 
+# https://medium.com/@pseguel/problems-with-python-on-macos-6b4aab58c765
+# macos python
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY = "YES"
+
 [tasks]
 00_is_just_rooted = "ansible-playbook playbooks/is_just_rooted.yml"
 01_config_telnetd = "ansible-playbook playbooks/telnetd_cfg.yml"
@@ -19,6 +23,9 @@ ANSIBLE_VAULT_PASSWORD_FILE = "$(which vault-keyring-client)"
 03_config_dhcpv4 = "ansible-playbook playbooks/dhcpv4_cfg.yml"
 04_config_device_id = "ansible-playbook playbooks/device_id.yml"
 05_register_and_optimize = "ansible-playbook playbooks/register_and_optimize.yml"
+06_post_wanc_config = "ansible-playbook playbooks/post_wanc_config.yml"
+07_install_boot_hook = "libexec/run-with-tftpd ansible-playbook playbooks/install_boot_hook.yml"
+08_setup_plugins = "ansible-playbook playbooks/setup_plugins.yml"
 
 backup_config = "libexec/run-with-tftpd ansible-playbook playbooks/backup_configs.yml"
 backup_flash = "libexec/run-with-tftpd ansible-playbook playbooks/backup_flash.yml"

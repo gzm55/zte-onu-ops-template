@@ -1,0 +1,68 @@
+#!/bin/sh
+
+set -eufx
+install_dest=/opt/upt/apps/apps/opt/apps/opmaintain/diagapps/boot-hook
+hook_dest=/opt/upt/apps/apps/etc/rc.local
+
+install_dir="${install_dest%/*}"
+hook_dir="${hook_dest%/*}"
+
+if [ -z "${TFTPD_IP-}" ] || [ -z "${TFTPD_PORT-}" ] || [ -z "${HASH-}" ]; then
+  echo "ERROR: TFTPD_IP or TFTPD_PORT or HASH is empty" >&2
+  exit 3
+fi
+
+changed=false
+set_changed() {
+  if ! $changed; then
+    changed=true
+    echo "== CHANGED =="
+  fi
+}
+
+main() {
+  [ ! -d "$install_dir" ] && mkdir -p -- "$install_dir" && set_changed
+  if [ ! -d "$install_dir" ]; then
+    echo "ERROR: install dir ($install_dir) does not exist" >&2
+    exit 4
+  fi
+
+  [ ! -d "$hook_dir" ] && mkdir -p -- "$hook_dir" && set_changed
+  if [ ! -d "$hook_dir" ]; then
+    echo "ERROR: hook dir ($hook_dir) does not exist" >&2
+    exit 5
+  fi
+
+  if ! printf "%s  %s\n" "$HASH" "$install_dest" | sha512sum -sc 2>/dev/null; then
+    tftp -g -l "$install_dest" -r hook "$TFTPD_IP" "$TFTPD_PORT" && set_changed
+  fi
+
+  if ! printf "%s  %s\n" "$HASH" "$install_dest" | sha512sum -sc; then
+    echo "ERROR: fail to download hook to $install_dest" >&2
+    exit 6
+  fi
+
+  if [ ! -x "$install_dest" ]; then
+    chmod 755 -- "$install_dest" && set_changed
+  fi
+  if [ ! -x "$install_dest" ]; then
+    echo "ERROR: fail to chmod +x for $install_dest" >&2
+    exit 7
+  fi
+
+  LINE='gdbus call -y -d com.ctc.saf1 -o /com/ctc/saf1 -m com.ctc.saf1.framework.DiagService boot-hook 1'
+  if [ ! -f "${hook_dest}" ] || [ ! -s "$hook_dest" ]; then
+    printf "%s\n" "$LINE" >"$hook_dest" && set_changed
+  elif ! grep -Fq "$LINE" "$hook_dest"; then
+    sed -i "1i $LINE" "$hook_dest" && set_changed
+  fi
+
+  if ! grep -Fq "$LINE" "$hook_dest"; then
+    echo "INSTALL rc.local FAIL" >&2
+    return 8
+  fi
+
+  echo "INSTALL SUCCESS"
+}
+
+main "$@"

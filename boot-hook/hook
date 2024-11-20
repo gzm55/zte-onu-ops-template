@@ -1,0 +1,11 @@
+#!/bin/sh
+
+# overwrite log
+exec >"${0}.log" 2>&1
+
+set -euf
+set -x
+
+date
+
+# add boot time hook here

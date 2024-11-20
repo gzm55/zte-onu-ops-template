@@ -38,6 +38,7 @@
             userconfig/flag_type \
             etc/hardcodefile/* \
             tagparam/paramtag \
+            opt/upt/apps/userconfig/db_app_user_cfg.xml \
         | tftp -p -l - -r cfg.tar.gz "$ip" {{ tftpd_port|quote }}
 
       - ( exit $? ) && echo OK || echo ERR $?

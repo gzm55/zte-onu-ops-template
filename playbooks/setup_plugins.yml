@@ -1,0 +1,95 @@
+---
+- hosts: target_onu 
+  gather_facts: False
+  vars:
+    cmds: []
+  tasks:
+  - name: Print plugin status
+    register: raw_cfgs
+    check_mode: False
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 5
+      command:
+      - set +x
+      - d=com.ctc.appframework1
+      - o=/com/ctc/appframework1
+      - interface=com.ctc.appframework1.AppAgent
+      - |-
+        gdbus call -y -d "$d" -o "$o" -m "$interface".List \
+        | grep -o "'[^']*':" \
+        | tr -cd "[a-zA-Z0-9_\n]" \
+        | { rc=0
+            while IFS='' read -r p && [ $rc = 0 ]; do \
+              [ -n "$p" ] || continue
+              s=$(gdbus call -y -d "$d" -o "$o" -m "$interface".GetStatus "$p" \
+                | tr -cd "[A-Z]") || rc=$?
+              if [ -n "$s" ]; then
+                printf ":%s=%s;\n" "$p" "$s"
+              else
+                rc=1
+              fi
+            done
+            echo rc=$?
+          }
+    changed_when: False
+    failed_when: raw_cfgs is failed or
+      raw_cfgs.stdout is not search('rc=0', multiline=True)
+
+  - name: Check plugin names
+    when: Plugins is defined
+    loop: "{{ Plugins | dict2items | map(attribute='key') }}"
+    vars:
+      pat: :{{item|regex_escape}}=
+    ansible.builtin.assert:
+      that: raw_cfgs is search(pat, multiline=True)
+      msg: plugin {{ item }} does not exist
+
+  - name: Compare plugin status
+    loop: "{{ Plugins | dict2items }}"
+    vars:
+      pat: :{{item.key|regex_escape}}={{item.value | ternary('RUNNING','STOPPED') | regex_escape}};
+    when:
+    - Plugins is defined
+    - raw_cfgs is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['gdbus', 'call', '-y', '-d', 'com.ctc.appframework1', '-o', '/com/ctc/appframework1', '-m', 'com.ctc.appframework1.AppAgent.' + (item.value | ternary('Run', 'Stop')), item.key|e ] ] }}"
+
+  - name: Join each cmd
+    when: cmds
+    set_fact:
+      cmds: "{{ cmds | map('map', 'ansible.builtin.quote') | map('join', ' ') }}"
+
+  - name: Fail fast for command list
+    when: cmds
+    set_fact:
+      cmds: "{{ [ 'set -uf +e',
+                  '_err=0',
+                  'no_err() { [ $_err = 0 ]; }',
+                  'found_err() { _err=$(( _err < $? ? $? : _err )); }',
+                ]
+                + ( cmds | map('ansible.builtin.regex_replace', '^(.*)$', 'no_err && { \\1; } || found_err'))
+                + [ 'echo rc=$_err' ] }}"
+
+  - name: Dump cmds for check mode
+    when: cmds and ansible_check_mode
+    ansible.builtin.debug:
+      var: cmds
+
+  - name: Execute telnet commands
+    when: cmds and not ansible_check_mode
+    register: update_cfg
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 10
+      command: "{{ cmds }}"
+    failed_when: update_cfg is failed or update_cfg.stdout is not search("rc=0")
+
+  - name: Already updated
+    when: not cmds
+    ansible.builtin.debug:
+      msg: Already updated

@@ -1,0 +1,214 @@
+---
+- hosts: target_onu 
+  gather_facts: False
+  vars:
+    cmds: []
+  tasks:
+  - name: Default lan multicast config
+    set_fact:
+      LAND: "{{ default_LAND
+        | ansible.builtin.combine(LAND|d({}), recursive=True)
+        | ansible.utils.keep_keys(target=[ 'IGMPSNPEnable', 'MLDSNPEnable', 'IgmpQueryVersion' ]) }}"
+
+  - name: Print tables
+    register: raw_cfgs
+    check_mode: False
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 5
+      command:
+      - err=0
+      - sendcmd 1 DB p SNTP; err=$(( err + $? ))
+      - sendcmd 1 DB p LAND; err=$(( err + $? ))
+      - sendcmd 1 DB p IGMPProxy; err=$(( err + $? ))
+      - sendcmd 1 DB p MLDProxyCfg; err=$(( err + $? ))
+      - sendcmd 1 DB p UPnPCfg; err=$(( err + $? ))
+      - echo rc=$err
+    changed_when: False
+    failed_when: raw_cfgs is failed or
+      raw_cfgs.stdout is not search('rc=0', multiline=True)
+
+  - name: Row counts
+    vars:
+      SNTP_c: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"SNTP\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
+      LAND_c: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"LAND\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
+      IGMPProxy_c: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"IGMPProxy\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
+      MLDProxyCfg_c: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"MLDProxyCfg\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
+      UPnPCfg_c: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"UPnPCfg\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
+    ansible.builtin.assert:
+      that:
+      - SNTP is not defined or SNTP_c == 1
+      - LAND is not defined or LAND_c == 1
+      - IGMPProxy is not defined or IGMPProxy_c == 1
+      - MLDProxyCfg is not defined or MLDProxyCfg_c == 1
+      - UPnPCfg is not defined or UPnPCfg_c == 1
+
+  - name: Split raw logs into tables
+    vars:
+      tbl_array: "{{ raw_cfgs.stdout | ansible.builtin.regex_findall(
+            '<Tbl (?:[^<]*<Row (?:[^<]*<DM [^>]*>)+[^<]*</Row>)*[^<]*</Tbl>',
+            multiline=True) }}"
+    set_fact:
+      # table order is important
+      sntp_cfg: "{{ tbl_array[0] }}"
+      lan_cfg: "{{ tbl_array[1] }}"
+      igmp_cfg: "{{ tbl_array[2] }}"
+      mld_cfg: "{{ tbl_array[3] }}"
+      upnp_cfg: "{{ tbl_array[4] }}"
+
+  - name: Check {{tbl}} keys
+    when: "{{ tbl }} is defined"
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items | map(attribute='key') }}"
+    vars:
+      tbl: SNTP
+      pat: <DM name="{{item|e|regex_escape}}"
+    ansible.builtin.assert:
+      that: sntp_cfg is search(pat, multiline=True)
+      msg: Table {{tbl}} does not contain the key {{ item }}
+
+  - name: Compare {{tbl}} values
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
+    vars:
+      tbl: SNTP
+      pat: <DM name="{{item.key|e|regex_escape}}" val="{{item.value|e|regex_escape}}"
+    when:
+    - "{{ tbl }} is defined"
+    - sntp_cfg is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: Check {{tbl}} keys
+    when: "{{ tbl }} is defined"
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items | map(attribute='key') }}"
+    vars:
+      tbl: LAND
+      pat: <DM name="{{item|e|regex_escape}}"
+    ansible.builtin.assert:
+      that: lan_cfg is search(pat, multiline=True)
+      msg: Table {{tbl}} does not contain the key {{ item }}
+
+  - name: Compare {{tbl}} values
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
+    vars:
+      tbl: LAND
+      pat: <DM name="{{item.key|e|regex_escape}}" val="{{item.value|e|regex_escape}}"
+    when:
+    - "{{ tbl }} is defined"
+    - lan_cfg is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: Check {{tbl}} keys
+    when: "{{ tbl }} is defined"
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items | map(attribute='key') }}"
+    vars:
+      tbl: IGMPProxy
+      pat: <DM name="{{item|e|regex_escape}}"
+    ansible.builtin.assert:
+      that: igmp_cfg is search(pat, multiline=True)
+      msg: Table {{tbl}} does not contain the key {{ item }}
+
+  - name: Compare {{tbl}} values
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
+    vars:
+      tbl: IGMPProxy
+      pat: <DM name="{{item.key|e|regex_escape}}" val="{{item.value|e|regex_escape}}"
+    when:
+    - "{{ tbl }} is defined"
+    - igmp_cfg is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: Check {{tbl}} keys
+    when: "{{ tbl }} is defined"
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items | map(attribute='key') }}"
+    vars:
+      tbl: MLDProxyCfg
+      pat: <DM name="{{item|e|regex_escape}}"
+    ansible.builtin.assert:
+      that: mld_cfg is search(pat, multiline=True)
+      msg: Table {{tbl}} does not contain the key {{ item }}
+
+  - name: Compare {{tbl}} values
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
+    vars:
+      tbl: MLDProxyCfg
+      pat: <DM name="{{item.key|e|regex_escape}}" val="{{item.value|e|regex_escape}}"
+    when:
+    - "{{ tbl }} is defined"
+    - mld_cfg is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: Check {{tbl}} keys
+    when: "{{ tbl }} is defined"
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items | map(attribute='key') }}"
+    vars:
+      tbl: UPnPCfg
+      pat: <DM name="{{item|e|regex_escape}}"
+    ansible.builtin.assert:
+      that: upnp_cfg is search(pat, multiline=True)
+      msg: Table {{tbl}} does not contain the key {{ item }}
+
+  - name: Compare {{tbl}} values
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
+    vars:
+      tbl: UPnPCfg
+      pat: <DM name="{{item.key|e|regex_escape}}" val="{{item.value|e|regex_escape}}"
+    when:
+    - "{{ tbl }} is defined"
+    - upnp_cfg is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: Join each cmd
+    when: cmds
+    set_fact:
+      cmds: "{{ ( cmds + [ ['sendcmd', 1, 'DB', 'save'] ] )
+                | map('map', 'ansible.builtin.quote')
+                | map('join', ' ')
+                | map('ansible.builtin.regex_replace', '^(sendcmd 1 DB set .*)$', '\\1 >/dev/null') }}"
+
+  - name: Fail fast for command list
+    when: cmds
+    set_fact:
+      cmds: "{{ [ 'set -uf +e',
+                  '_err=0',
+                  'no_err() { [ $_err = 0 ]; }',
+                  'found_err() { _err=$(( _err < $? ? $? : _err )); }',
+                ]
+                + ( cmds | map('ansible.builtin.regex_replace', '^(.*)$', 'no_err && { \\1; } || found_err'))
+                + [ 'echo rc=$_err' ] }}"
+
+  - name: Dump cmds for check mode
+    when: cmds and ansible_check_mode
+    ansible.builtin.debug:
+      var: cmds
+
+  - name: Execute telnet commands
+    when: cmds and not ansible_check_mode
+    register: update_cfg
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #" ]
+      timeout: 10
+      command: "{{ cmds }}"
+    failed_when: update_cfg is failed or update_cfg.stdout is not search("rc=0")
+
+  - name: Already updated
+    when: not cmds
+    ansible.builtin.debug:
+      msg: Already updated

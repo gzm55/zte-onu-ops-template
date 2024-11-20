@@ -58,7 +58,7 @@
     ansible.builtin.debug:
       var: cmds
 
-  - name: Update tagparam
+  - name: Execute telnet commands
     when: cmds and not ansible_check_mode
     register: update_wanc
     ansible.netcommon.telnet:

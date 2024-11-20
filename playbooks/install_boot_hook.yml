@@ -1,0 +1,90 @@
+---
+- hosts: target_onu 
+  gather_facts: False
+  tasks:
+  - name: detect local ip
+    delegate_to: localhost
+    ansible.builtin.setup:
+      gather_subset: [ "all_ipv4_addresses" ]
+
+  - name: Default lan ipv4 config
+    set_fact:
+      LAND: "{{ default_LAND | ansible.builtin.combine(LAND|d({}), recursive=True) }}"
+
+  - name: Get tftpd ip and port
+    vars:
+      host_prefix: "{{ (ansible_host+'/'+LAND.NetMask) | ansible.utils.ipv4('host/prefix') }}"
+    set_fact:
+      tftpd_port: "{{ lookup('env', 'TFTPD_PORT') | ansible.builtin.mandatory | int }}"
+      tftpd_base: "{{ lookup('env', 'TFTPD_BASE') | ansible.builtin.mandatory }}"
+      all_ip: "{{ ansible_all_ipv4_addresses | ansible.utils.ipv4(host_prefix) + ansible_all_ipv4_addresses | reject('match', '127.') | ansible.builtin.difference(ansible_all_ipv4_addresses | ansible.utils.ipv4(host_prefix)) }}"
+    failed_when: not all_ip or not tftpd_base or tftpd_port <= 0
+
+  - name: Block for remove temp files
+    block:
+    - name: Prepare hook scripts
+      delegate_to: localhost
+      changed_when: False
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../boot-hook/" # copy all files in boot-hook/ folder
+        dest: "{{ tftpd_base }}/"
+  
+    - name: Get sha512 hash of hook
+      delegate_to: localhost
+      register: hook_stat
+      ansible.builtin.stat:
+        path: "{{ tftpd_base }}/hook"
+        checksum_algorithm: sha512
+  
+    - name: Install hook
+      ansible.netcommon.telnet:
+        login_prompt: "Login: "
+        port: "{{ ansible_port }}"
+        prompts: [ " #" ]
+        timeout: 30
+        command:
+        - set +e
+        - trap 'echo SIGNAL' TERM QUIT INT HUP
+  
+        - ip=''
+        - for i in {{ all_ip | join(' ') }}; do ping $i -T 0 -c 1 >/dev/null 2>/dev/null && { ip=$i; break; }; done
+        - export TFTPD_IP="$ip"
+        - export TFTPD_PORT={{ tftpd_port|quote }}
+        - export HASH={{ hook_stat.stat.checksum|quote }}
+  
+        - tftp -g -l - -r install "$TFTPD_IP" "$TFTPD_PORT" | /bin/sh -s
+
+      register: install_result
+      changed_when: install_result.stdout_lines | select('search', '== CHANGED ==')
+      failed_when: install_result is failed or
+        install_result.stdout_lines
+        | select('search', 'INSTALL SUCCESS')
+        | length == 0
+      notify:
+      - Reboot
+
+    always:
+    - name: Remove temp files
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ tftpd_base }}"
+        state: absent
+      changed_when: False
+      failed_when: False
+
+    - name: Leave empty dir
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ tftpd_base }}"
+        state: directory
+      changed_when: False
+      failed_when: False
+
+  handlers:
+  - name: Reboot
+    ansible.netcommon.telnet:
+      login_prompt: "Login: "
+      port: "{{ ansible_port }}"
+      prompts: [ " #", 'reboot' ]
+      timeout: 10
+      command: reboot

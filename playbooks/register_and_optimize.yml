@@ -19,6 +19,10 @@
       - sendcmd 1 DB p CltLmt; err=$(( err + $? ))
       - sendcmd 1 DB p WANC; err=$(( err + $? ))
       - sendcmd 1 DB p WLCInfo; err=$(( err + $? ))
+      - sendcmd 1 DB p FWBase; err=$(( err + $? ))
+      - sendcmd 1 DB p QOSBasic; err=$(( err + $? ))
+      - sendcmd 1 DB p QOSDownBasic; err=$(( err + $? ))
+      - sendcmd 1 DB p FWALG; err=$(( err + $? ))
       - echo rc=$err
     changed_when: False
     failed_when: raw_cfgs is failed or
@@ -32,6 +36,18 @@
       PDTCTUSERINFO_c: "{{ raw_cfgs.stdout
         | ansible.builtin.regex_search('<Tbl name=\"PDTCTUSERINFO\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
         | first | int }}"
+      FWBase_c: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"FWBase\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
+      QOSBasic_c: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"QOSBasic\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
+      QOSDownBasic_c: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"QOSDownBasic\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
+      FWALG_c: "{{ raw_cfgs.stdout
+        | ansible.builtin.regex_search('<Tbl name=\"FWALG\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
+        | first | int }}"
     set_fact:
       CltLmt_c: "{{ raw_cfgs.stdout
         | ansible.builtin.regex_search('<Tbl name=\"CltLmt\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
@@ -42,7 +58,7 @@
       WLCInfo_c: "{{ raw_cfgs.stdout
         | ansible.builtin.regex_search('<Tbl name=\"WLCInfo\" RowCount=\"([0-9]+)\">', '\\1', multiline=True)
         | first | int }}"
-    failed_when: MgtServer_c != 1 or PDTCTUSERINFO_c != 1
+    failed_when: MgtServer_c != 1 or PDTCTUSERINFO_c != 1 or FWBase_c != 1 or QOSBasic_c != 1 or QOSDownBasic_c != 1 or FWALG_c != 1
 
   - name: Split raw logs into tables
     vars:
@@ -56,6 +72,10 @@
       cltlmt_cfg: "{{ tbl_array[2] }}"
       wanc_cfg: "{{ tbl_array[3] }}"
       wlcinfo_cfg: "{{ tbl_array[4] }}"
+      fwbase_cfg: "{{ tbl_array[5] }}"
+      qos_up_cfg: "{{ tbl_array[6] }}"
+      qos_down_cfg: "{{ tbl_array[7] }}"
+      nat_cfg: "{{ tbl_array[8] }}"
 
   - name: Check {{tbl}} keys
     loop: "{{ hostvars[inventory_hostname][tbl] | dict2items | map(attribute='key') }}"
@@ -135,7 +155,7 @@
     set_fact:
       cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, item, 'Enable', 0] ] }}"
 
-  - name: Close xiaoyiButler
+  - name: Set Led on/off
     loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
     vars:
       tbl: WLCInfo
@@ -143,6 +163,45 @@
     when:
     - WLCInfo_c > 0
     - wlcinfo_cfg is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [
+          ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value],
+          ['tso', (item.value == 0) | ternary('allon', 'alloff') ]
+        ] }}"
+
+  - name: Set basic firewall config
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
+    vars:
+      tbl: FWBase
+      pat: <DM name="{{item.key|e|regex_escape}}" val="{{item.value|e|regex_escape}}"
+    when: fwbase_cfg is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: Set up qos cnofig
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
+    vars:
+      tbl: QOSBasic
+      pat: <DM name="{{item.key|e|regex_escape}}" val="{{item.value|e|regex_escape}}"
+    when: qos_up_cfg is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: Set down qos cnofig
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
+    vars:
+      tbl: QOSDownBasic
+      pat: <DM name="{{item.key|e|regex_escape}}" val="{{item.value|e|regex_escape}}"
+    when: qos_down_cfg is not search(pat, multiline=True)
+    set_fact:
+      cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
+
+  - name: Set NAT algo
+    loop: "{{ hostvars[inventory_hostname][tbl] | dict2items }}"
+    vars:
+      tbl: FWALG
+      pat: <DM name="{{item.key|e|regex_escape}}" val="{{item.value|e|regex_escape}}"
+    when: nat_cfg is not search(pat, multiline=True)
     set_fact:
       cmds: "{{ cmds + [ ['sendcmd', 1, 'DB', 'set', tbl, 0, item.key, item.value] ] }}"
 
@@ -170,7 +229,7 @@
     ansible.builtin.debug:
       var: cmds
 
-  - name: Update tagparam
+  - name: Execute telnet commands
     when: cmds and not ansible_check_mode
     register: update_cfg
     ansible.netcommon.telnet:
